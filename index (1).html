@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Pega Caixa</title>
+<style>
+  /* Página escura, com o jogo centralizado */
+  html, body { margin: 0; height: 100%; background: #1b1b1b; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  /* Caixa do jogo: mantém a proporção 9:16 e cabe em qualquer tela */
+  #jogo { position: relative; height: 100vh; max-width: 100vw; aspect-ratio: 9 / 16; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  /* Tela de início e de fim de jogo */
+  #tela { position: absolute; inset: 0; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; gap: 14px;
+          background: rgba(0,0,0,.75); color: #fff; font-family: sans-serif; text-align: center; }
+  #tela h1 { margin: 0; font-size: 36px; color: #ffd400; }
+  #tela p { margin: 0; font-size: 20px; }
+  #botao { font-size: 24px; padding: 12px 28px; border: 0; border-radius: 10px;
+           background: #ffd400; color: #000; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="jogo">
+  <canvas id="tela-jogo" width="360" height="640"></canvas>
+  <div id="tela">
+    <h1 id="titulo">Pega Caixa</h1>
+    <p id="msg">Arraste o dedo (ou use as setas) e pegue as caixas!</p>
+    <button id="botao">Jogar</button>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('tela-jogo');
+const c = cv.getContext('2d');
+const L = cv.width, A = cv.height;       // largura e altura do jogo
+const CHAO = A - 60;                     // altura onde fica o chão
+
+// ---------- CENÁRIO: armazém desenhado uma única vez numa "tela escondida" ----------
+const fundoImg = document.createElement('canvas');
+fundoImg.width = L; fundoImg.height = A;
+
+function desenharFundo() {
+  const g = fundoImg.getContext('2d');
+
+  // parede do fundo (degradê de roxo escuro para claro)
+  const p = g.createLinearGradient(0, 0, 0, 430);
+  p.addColorStop(0, '#4e4872'); p.addColorStop(1, '#a29bc4');
+  g.fillStyle = p; g.fillRect(0, 0, L, 430);
+
+  // teto escuro e janelas de luz (claraboias)
+  g.fillStyle = '#34304f'; g.fillRect(0, 0, L, 50);
+  g.fillStyle = '#e3eaff'; g.fillRect(50, 62, 100, 22); g.fillRect(210, 62, 100, 22);
+
+  // viga horizontal e pilares
+  g.fillStyle = '#6d6892'; g.fillRect(0, 100, L, 8);
+  g.fillStyle = '#5a5580';
+  g.fillRect(0, 0, 22, 430); g.fillRect(L - 22, 0, 22, 430); g.fillRect(172, 50, 16, 380);
+
+  // lâmpadas penduradas com brilho
+  for (const x of [75, 285]) {
+    g.fillStyle = 'rgba(255,230,120,.18)';
+    g.beginPath(); g.moveTo(x - 12, 40); g.lineTo(x + 12, 40); g.lineTo(x + 45, 200); g.lineTo(x - 45, 200); g.fill();
+    g.fillStyle = '#222'; g.fillRect(x - 1, 0, 2, 32);
+    g.fillStyle = '#ffd84d'; g.beginPath(); g.moveTo(x - 6, 32); g.lineTo(x + 6, 32); g.lineTo(x + 12, 42); g.lineTo(x - 12, 42); g.fill();
+  }
+
+  // caixa "de enfeite" (cor apagada para não confundir com as caixas do jogo)
+  function caixaFundo(x, base, w, h) {
+    g.fillStyle = '#a98d7c'; g.fillRect(x, base - h, w, h);
+    g.fillStyle = '#8d7263'; g.fillRect(x + w / 2 - 2, base - h, 4, h);
+  }
+
+  // prateleira azul-arroxeada com caixas em cada andar
+  function prateleira(x0, w) {
+    g.fillStyle = '#6a6fd6';
+    g.fillRect(x0, 140, 5, 280); g.fillRect(x0 + w - 5, 140, 5, 280);   // colunas
+    for (const y of [230, 320, 410]) {
+      g.fillRect(x0, y, w, 5);                                          // tábua
+      caixaFundo(x0 + 10, y, 30, 34); caixaFundo(x0 + 44, y, 26, 26); caixaFundo(x0 + 74, y, 32, 40);
+    }
+  }
+  prateleira(32, 132);
+  prateleira(196, 132);
+
+  // piso de concreto com linhas em perspectiva
+  const f = g.createLinearGradient(0, 430, 0, A);
+  f.addColorStop(0, '#8a86a6'); f.addColorStop(1, '#5f5b80');
+  g.fillStyle = f; g.fillRect(0, 430, L, A - 430);
+  g.strokeStyle = 'rgba(255,255,255,.13)'; g.lineWidth = 1;
+  for (let i = -8; i <= 8; i++) {                    // linhas que saem do centro
+    g.beginPath(); g.moveTo(180, 430); g.lineTo(180 + i * 90, A); g.stroke();
+  }
+  for (const y of [445, 465, 495, 540, 600]) {       // linhas de lado a lado
+    g.beginPath(); g.moveTo(0, y); g.lineTo(L, y); g.stroke();
+  }
+
+  // paletes com pilhas de caixas nas laterais
+  for (const lado of [0, 1]) {
+    const x = lado ? L - 46 : 0;
+    g.fillStyle = '#8a5a2b'; g.fillRect(x, 566, 46, 12);          // palete de madeira
+    caixaFundo(x + 2, 566, 42, 36); caixaFundo(x + 4, 530, 38, 34);
+  }
+}
+desenharFundo();
+
+// Estado do jogo
+let caminhao, caixas, pontos, vidas, rodando, contador;
+const teclas = {};                       // guarda quais setas estão apertadas
+
+// Começa (ou recomeça) tudo do zero
+function iniciar() {
+  caminhao = { x: L / 2 - 40, y: CHAO - 40, w: 80, h: 40 };
+  caixas = [];
+  pontos = 0;
+  vidas = 3;
+  contador = 0;
+  rodando = true;
+  document.getElementById('tela').style.display = 'none';
+}
+
+// Fim de jogo: mostra a pontuação e o botão Recomeçar
+function terminar() {
+  rodando = false;
+  document.getElementById('titulo').textContent = 'Fim de jogo';
+  document.getElementById('msg').textContent = 'Você pegou ' + pontos + ' caixas!';
+  document.getElementById('botao').textContent = 'Recomeçar';
+  document.getElementById('tela').style.display = 'flex';
+}
+
+// Atualiza o jogo (roda ~60 vezes por segundo)
+function atualizar() {
+  // move o caminhão com as setas
+  if (teclas.ArrowLeft)  caminhao.x -= 6;
+  if (teclas.ArrowRight) caminhao.x += 6;
+  caminhao.x = Math.max(0, Math.min(L - caminhao.w, caminhao.x)); // não sai da tela
+
+  // a cada ~50 quadros nasce uma caixa nova em posição aleatória
+  contador++;
+  if (contador % 50 === 0) {
+    caixas.push({ x: Math.random() * (L - 36), y: -36, w: 36, h: 36 });
+  }
+
+  // move as caixas para baixo e confere o que aconteceu com cada uma
+  for (let i = caixas.length - 1; i >= 0; i--) {
+    const b = caixas[i];
+    b.y += 3;
+    const pegou = b.x < caminhao.x + caminhao.w && b.x + b.w > caminhao.x &&
+                  b.y + b.h > caminhao.y && b.y < caminhao.y + caminhao.h;
+    if (pegou) {                         // caiu no caminhão: +1 ponto
+      pontos++;
+      caixas.splice(i, 1);
+    } else if (b.y + b.h >= CHAO) {      // bateu no chão: perde 1 vida
+      vidas--;
+      caixas.splice(i, 1);
+      if (vidas <= 0) terminar();
+    }
+  }
+}
+
+// Desenha tudo na tela
+function desenhar() {
+  c.drawImage(fundoImg, 0, 0);                           // cenário do armazém
+  c.fillStyle = '#ffd400'; c.fillRect(0, CHAO, L, 6);    // faixa amarela de segurança
+
+  // caixas de papelão (com contorno escuro para se destacarem do fundo)
+  for (const b of caixas) {
+    c.fillStyle = '#c8802a'; c.fillRect(b.x, b.y, b.w, b.h);
+    c.fillStyle = '#f0c27a'; c.fillRect(b.x + b.w / 2 - 3, b.y, 6, b.h); // fita
+    c.strokeStyle = '#3b2108'; c.lineWidth = 3; c.strokeRect(b.x, b.y, b.w, b.h);
+  }
+
+  // caminhão: carroceria, cabine e rodas
+  const t = caminhao;
+  c.fillStyle = '#1565c0'; c.fillRect(t.x, t.y, t.w, t.h - 8);
+  c.fillStyle = '#e53935'; c.fillRect(t.x + t.w - 22, t.y + 8, 22, t.h - 16);
+  c.fillStyle = '#000';
+  c.beginPath(); c.arc(t.x + 18, t.y + t.h - 6, 8, 0, 7); c.fill();
+  c.beginPath(); c.arc(t.x + t.w - 16, t.y + t.h - 6, 8, 0, 7); c.fill();
+
+  // placar: pontos e vidas
+  c.font = 'bold 22px sans-serif'; c.fillStyle = '#fff';
+  c.strokeStyle = '#000'; c.lineWidth = 4;
+  c.textAlign = 'left';  c.strokeText('Pontos: ' + pontos, 30, 30); c.fillText('Pontos: ' + pontos, 30, 30);
+  c.textAlign = 'right'; c.strokeText('Vidas: ' + vidas, L - 30, 30); c.fillText('Vidas: ' + vidas, L - 30, 30);
+}
+
+// Repete atualizar + desenhar o tempo todo
+function loop() {
+  if (rodando) atualizar();
+  if (caminhao) desenhar();
+  requestAnimationFrame(loop);
+}
+
+// Teclado
+addEventListener('keydown', e => teclas[e.key] = true);
+addEventListener('keyup',   e => teclas[e.key] = false);
+
+// Toque e mouse: o caminhão segue o dedo na horizontal
+function seguirDedo(e) {
+  if (!rodando) return;
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (L / r.width);
+  caminhao.x = x - caminhao.w / 2;
+}
+cv.addEventListener('pointerdown', seguirDedo);
+cv.addEventListener('pointermove', seguirDedo);
+
+document.getElementById('botao').addEventListener('click', iniciar);
+loop();
+</script>
+</body>
+</html>
